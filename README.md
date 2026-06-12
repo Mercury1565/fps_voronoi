@@ -67,9 +67,10 @@ finding each point's nearest sample, measuring how far cells reach, and counting
 points per cell were three separate sweeps over the data. The expensive part —
 comparing every point against every sample — was repeated. Phase 2 does all of
 that in **one sweep**: it computes:
+
 - the nearest sample,
 - the distance,
-- the per-cellreach,
+- the per-cell reach,
 - the per-cell point count, and
 - even *which* point sits farthest out in each cell
 
