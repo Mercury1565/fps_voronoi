@@ -185,3 +185,38 @@ python -m pytest phase_3/tests/ -q
   options, and the API.
 - **`phase_3/README.md`** — insertion, eviction priority, one-hop updates, the
   budget tracker, and the `correct()` frame.
+
+e the per-frame columns from the temporal run. Each row is one frame in the sequence:
+
+  ┌─────────────┬────────────────────────────────────────────────────────────────────────────────────────────────┐
+  │   Column    │                                           What it is                                           │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ frame       │ The frame index in the dataset (e.g. --start 0 → first row is frame 0, the FPS baseline).      │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ pts         │ Number of points in that frame's cloud after the --max-range crop and --min-z ground removal — │
+  │             │  i.e. the size of P the engine actually ran on. It varies frame to frame as the scene changes. │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │             │ Number of samples in the set S after this frame's correction. Starts at --samples (64) on      │
+  │ M           │ frame 0; drifts as insertions add and evictions remove samples. This is the carried-forward    │
+  │             │ sample count.                                                                                  │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │             │ n_requested — total corrections this frame asked for (ins + evt). This is the headline "how    │
+  │ edits       │ much did the scene change" signal. It's also what gets compared against --budget to decide     │
+  │             │ patch-vs-rebuild.                                                                              │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ ins         │ Insertions applied — samples added at coverage gaps (new structure appeared that the carried   │
+  │             │ samples didn't cover).                                                                         │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ evt         │ Evictions applied — samples removed because their cells vanished or went redundant (structure  │
+  │             │ left the scene / emptied out).                                                                 │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ misfit_mean │ Mean distance from each point in the new cloud to the nearest carried-forward sample, measured │
+  │             │  before correcting. How well last frame's samples already fit this frame, on average (metres). │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ misfit_max  │ Same, but the worst point — the farthest any new point sits from the previous samples          │
+  │             │ (metres). Sensitive to a single newly-appeared region.                                         │
+  ├─────────────┼────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │             │ Free-text flag. FPS baseline on frame 0 (fresh sampling, nothing to correct). On any later     │
+  │ note        │ frame it shows FULL FPS REBUILD if edits > budget tripped the fallback (none did in your       │
+  │             │ 30-frame run).                                                                                 │
+  └─────────────┴────────────────────────────────────────────────────────────────────────────────────────────────┘

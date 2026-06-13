@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from data_io import load_lidar_bin, load_frame
 from fps import farthest_point_sampling
 from primitives import (
     cell_membership,
@@ -62,9 +64,12 @@ def generate_mimic_2d(N: int = 10_000, seed: int = 42) -> torch.Tensor:
 
 
 def load_kitti_bin(path: str) -> torch.Tensor:
-    """Load a KITTI .bin file and return only the X,Y columns (2D top-down)."""
-    pts = np.fromfile(path, dtype=np.float32).reshape(-1, 4)
-    return torch.from_numpy(pts[:, :2])
+    """Load a KITTI .bin file and return only the X,Y columns (2D top-down).
+
+    Kept for backwards compatibility; new code should use
+    ``data_io.load_lidar_bin`` (handles KITTI + nuScenes, 2-D or 3-D).
+    """
+    return load_lidar_bin(path, dims=2)
 
 
 def print_section(title: str) -> None:
@@ -88,19 +93,39 @@ def _voronoi_finite_segments(vor, clip_box):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Voronoi primitives demo (2-D)")
-    parser.add_argument("bin_file", nargs="?", help="KITTI .bin file (X,Y used)")
+    parser = argparse.ArgumentParser(description="Voronoi primitives demo")
+    parser.add_argument("bin_file", nargs="?",
+                        help="LiDAR frame (.bin / .pcd.bin). Overrides --dataset.")
+    parser.add_argument("--dataset", choices=["nuscenes", "kitti"],
+                        help="Load a real frame from data/<dataset> by index.")
+    parser.add_argument("--frame", type=int, default=0,
+                        help="Frame index within --dataset (default: 0)")
+    parser.add_argument("--dims", type=int, choices=[2, 3], default=3,
+                        help="Run the engine in 3-D (x,y,z) or 2-D top-down (x,y). "
+                             "Default: 3 for real data.")
+    parser.add_argument("--max-range", type=float, default=None,
+                        help="Drop points beyond this horizontal radius (m).")
+    parser.add_argument("--min-z", type=float, default=None,
+                        help="Drop points below this height (rough ground removal).")
     parser.add_argument("--samples", type=int, default=NUM_SAMPLES,
                         help="Number of FPS samples (default: 64)")
     args = parser.parse_args()
 
+    dims = args.dims
     if args.bin_file:
         print(f"Loading LiDAR frame from {args.bin_file} …")
-        P = load_kitti_bin(args.bin_file)
-        print(f"  Loaded {P.shape[0]:,} points (X,Y projection)")
+        P = load_lidar_bin(args.bin_file, dims=dims,
+                           max_range=args.max_range, min_z=args.min_z)
+        print(f"  Loaded {P.shape[0]:,} points ({dims}-D)")
+    elif args.dataset:
+        print(f"Loading {args.dataset} frame {args.frame} …")
+        P = load_frame(args.dataset, args.frame, dims=dims,
+                       max_range=args.max_range, min_z=args.min_z)
+        print(f"  Loaded {P.shape[0]:,} points ({dims}-D)")
     else:
-        print("No .bin file provided — generating mimic 2-D LiDAR scene (N≈10,000).")
+        print("No frame provided — generating mimic 2-D LiDAR scene (N≈10,000).")
         P = generate_mimic_2d(N=10_000)
+        dims = 2
         print(f"  Generated {P.shape[0]:,} points")
 
     M = args.samples
@@ -152,8 +177,11 @@ def main():
 
     from scipy.spatial import Voronoi
 
-    Pnp = P.numpy()
-    Snp = S.numpy()
+    # Engine ran in `dims`-D; the panels are top-down, so plot the (x, y)
+    # projection. Constructs that are intrinsically 2-D (the scipy Voronoi
+    # ridge overlay) are only drawn when the samples are themselves 2-D.
+    Pnp = P.numpy()[:, :2]
+    Snp = S.numpy()[:, :2]
     cell_np = cell_ids.numpy()
     radii_np = radii.numpy()
     counts_np = counts.numpy()
@@ -163,8 +191,11 @@ def main():
     ymin = Pnp[:, 1].min() - pad;  ymax = Pnp[:, 1].max() + pad
     clip_box = (xmin, xmax, ymin, ymax)
 
-    vor = Voronoi(Snp)
-    vor_segs = _voronoi_finite_segments(vor, clip_box)
+    if dims == 2:
+        vor = Voronoi(Snp)
+        vor_segs = _voronoi_finite_segments(vor, clip_box)
+    else:
+        vor_segs = []  # 2-D Voronoi ridges aren't meaningful for 3-D samples
 
     cmap = plt.get_cmap("tab20")
     cell_colors = cell_np % 20

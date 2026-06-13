@@ -46,6 +46,17 @@ def time_fn(fn, *args):
     return mean, var ** 0.5
 
 
+def warmup_gpu(fn, *args, seconds: float = 2.0):
+    """Run `fn` repeatedly for `seconds` so GPU clocks reach steady-state
+    Boost before any timed measurement starts. No-op on CPU."""
+    if not torch.cuda.is_available():
+        return
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < seconds:
+        fn(*args)
+    torch.cuda.synchronize()
+
+
 def unfused_pass(P, S):
     """Phase 1's three separate sweeps — what fused_knn_pass replaces."""
     cell_ids, distances = cell_membership(P, S)
@@ -63,6 +74,8 @@ def main():
     # Random subsample — quality doesn't affect pass timing
     idx = torch.randperm(N, device=device)[:M]
     S = P[idx]
+
+    warmup_gpu(fused_knn_pass, P, S)
 
     # Pre-compute stats for downstream timings (detect_flags needs them)
     stats = compute_stats(P, S)

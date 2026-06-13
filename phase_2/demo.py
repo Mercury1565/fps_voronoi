@@ -25,8 +25,10 @@ from matplotlib.collections import LineCollection
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "phase_1"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from demo import generate_mimic_2d, load_kitti_bin, _voronoi_finite_segments  # noqa: E402
+from data_io import load_lidar_bin, load_frame  # noqa: E402
+from demo import generate_mimic_2d, _voronoi_finite_segments  # noqa: E402
 from fused import analyze  # noqa: E402
 
 NUM_SAMPLES = 64
@@ -50,28 +52,50 @@ def build_imperfect_samples(P: torch.Tensor, m: int, n_stray: int = 4, seed: int
     half = (hi - lo) / 2
     # Drop stray samples well beyond the cloud extent (1.4x the half-extent past
     # each edge). Every real point is then closer to some interior sample, so
-    # these cells own essentially nothing — the vanishing-cell case.
-    offsets = torch.tensor([[1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]])
-    stray = center + offsets[:n_stray] * half * 1.4
+    # these cells own essentially nothing — the vanishing-cell case. Sign the x,y
+    # corners and leave any extra dims (z) at centre, so it works in 2-D and 3-D.
+    d = P.shape[1]
+    corners = torch.tensor([[1.0, 1.0], [-1.0, 1.0], [-1.0, -1.0], [1.0, -1.0]])
+    offsets = torch.zeros(n_stray, d)
+    offsets[:, :2] = corners[:n_stray, : min(2, d)]
+    stray = center + offsets * half * 1.4
     return torch.cat([S, stray.float()], dim=0)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 2 detector visualisation (2-D)")
-    parser.add_argument("bin_file", nargs="?", help="KITTI .bin file (X,Y used)")
+    parser = argparse.ArgumentParser(description="Phase 2 detector visualisation")
+    parser.add_argument("bin_file", nargs="?",
+                        help="LiDAR frame (.bin / .pcd.bin). Overrides --dataset.")
+    parser.add_argument("--dataset", choices=["nuscenes", "kitti"],
+                        help="Load a real frame from data/<dataset> by index.")
+    parser.add_argument("--frame", type=int, default=0,
+                        help="Frame index within --dataset (default: 0)")
+    parser.add_argument("--dims", type=int, choices=[2, 3], default=3,
+                        help="Run the engine in 3-D (x,y,z) or 2-D top-down (x,y).")
+    parser.add_argument("--max-range", type=float, default=None,
+                        help="Drop points beyond this horizontal radius (m).")
+    parser.add_argument("--min-z", type=float, default=None,
+                        help="Drop points below this height (rough ground removal).")
     parser.add_argument("--samples", type=int, default=NUM_SAMPLES)
     parser.add_argument("--coverage-factor", type=float, default=1.6)
     parser.add_argument("--separation-factor", type=float, default=0.45)
     parser.add_argument("--min-occupancy", type=int, default=1)
     args = parser.parse_args()
 
+    dims = args.dims
     if args.bin_file:
         print(f"Loading LiDAR frame from {args.bin_file} …")
-        P = load_kitti_bin(args.bin_file)
+        P = load_lidar_bin(args.bin_file, dims=dims,
+                           max_range=args.max_range, min_z=args.min_z)
+    elif args.dataset:
+        print(f"Loading {args.dataset} frame {args.frame} …")
+        P = load_frame(args.dataset, args.frame, dims=dims,
+                       max_range=args.max_range, min_z=args.min_z)
     else:
-        print("No .bin file provided — generating mimic 2-D LiDAR scene.")
+        print("No frame provided — generating mimic 2-D LiDAR scene.")
         P = generate_mimic_2d(N=10_000)
-    print(f"  {P.shape[0]:,} points")
+        dims = 2
+    print(f"  {P.shape[0]:,} points ({dims}-D)")
 
     M = args.samples
     S = build_imperfect_samples(P, M, seed=0)
@@ -90,8 +114,8 @@ def main():
     print(f"  vanishing cells  : {flags.vanishing_cells.numel()} cells")
     print(f"  min pairwise dist: {stats.min_pairwise.item():.4f}")
 
-    # ── numpy views ──────────────────────────────────────────────────────────
-    Pnp, Snp = P.numpy(), S.numpy()
+    # ── numpy views (top-down x,y projection for plotting) ────────────────────
+    Pnp, Snp = P.numpy()[:, :2], S.numpy()[:, :2]
     cell_np = stats.nearest_id.numpy()
     radii_np = stats.covering_radius.numpy()
 
@@ -100,9 +124,12 @@ def main():
     ymin, ymax = Pnp[:, 1].min() - pad, Pnp[:, 1].max() + pad
     clip_box = (xmin, xmax, ymin, ymax)
 
-    from scipy.spatial import Voronoi
-    vor = Voronoi(Snp)
-    vor_segs = _voronoi_finite_segments(vor, clip_box)
+    if dims == 2:
+        from scipy.spatial import Voronoi
+        vor = Voronoi(Snp)
+        vor_segs = _voronoi_finite_segments(vor, clip_box)
+    else:
+        vor_segs = []  # 2-D Voronoi ridges aren't meaningful for 3-D samples
 
     fig, axes = plt.subplots(2, 2, figsize=(15, 13))
     fig.suptitle(

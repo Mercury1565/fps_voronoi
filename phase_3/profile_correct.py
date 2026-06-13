@@ -43,6 +43,17 @@ def time_fn(fn, *args):
     return mean, var ** 0.5
 
 
+def warmup_gpu(fn, *args, seconds: float = 2.0):
+    """Run `fn` repeatedly for `seconds` so GPU clocks reach steady-state
+    Boost before any timed measurement starts. No-op on CPU."""
+    if not torch.cuda.is_available():
+        return
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < seconds:
+        fn(*args)
+    torch.cuda.synchronize()
+
+
 def time_fn_with_setup(setup, work):
     """Like time_fn, but `setup()` (excluded from timing) builds fresh args for
     each call. Needed for insert/evict, which mutate the CorrectionState."""
@@ -87,6 +98,8 @@ def main():
     # something to fix.
     idx = torch.randperm(N, device=device)[:M]
     S = P[idx].clone()
+
+    warmup_gpu(compute_stats, P, S)
 
     base_state = CorrectionState.from_cloud(P, S)
     insertion_point = P[torch.randint(0, N, (1,), device=device)].squeeze(0)
