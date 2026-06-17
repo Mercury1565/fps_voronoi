@@ -90,6 +90,43 @@ def load_lidar_bin(
     return torch.from_numpy(np.ascontiguousarray(out, dtype=np.float32))
 
 
+def chamfer_distance(A: torch.Tensor, B: torch.Tensor, chunk: int = 8192):
+    """Symmetric mean Chamfer distance between point sets ``A`` and ``B``.
+
+    Same definition as ``extract/`` (mean of L2 nearest-neighbour distances in
+    both directions), but returns the two directed halves separately because
+    here ``A`` is a cloud and ``B`` a sample set, and the halves mean different
+    things:
+
+        a2b — mean over A of distance to its nearest point in B.
+              With A = cloud, B = samples this is the **coverage** error: how far
+              the typical cloud point is from any sample (== the misfit_mean we
+              already track).
+        b2a — mean over B of distance to its nearest point in A.
+              With B = samples, A = cloud this is the **faithfulness** error: how
+              far a sample sits from any real point — large for stale / floating
+              samples that no longer correspond to anything in the cloud.
+
+    Returns ``(total, a2b, b2a)`` with ``total = a2b + b2a``, all in metres.
+    Computed in chunks over ``A`` so it scales to large clouds; one pass yields
+    both directions.
+    """
+    Na, Nb = A.shape[0], B.shape[0]
+    if Na == 0 or Nb == 0:
+        raise ValueError("Chamfer distance needs two non-empty point sets.")
+
+    a2b_sum = 0.0
+    b2a_min = torch.full((Nb,), float("inf"), dtype=torch.float32, device=B.device)
+    for lo in range(0, Na, chunk):
+        d = torch.cdist(A[lo : lo + chunk], B)          # (chunk, Nb)
+        a2b_sum += float(d.min(dim=1).values.sum())
+        b2a_min = torch.minimum(b2a_min, d.min(dim=0).values)
+
+    a2b = a2b_sum / Na
+    b2a = float(b2a_min.mean())
+    return a2b + b2a, a2b, b2a
+
+
 def list_frames(dataset: str) -> list[str]:
     """Sorted list of LiDAR frame paths for ``"nuscenes"`` or ``"kitti"``."""
     d = dataset.lower()

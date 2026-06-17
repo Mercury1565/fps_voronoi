@@ -177,3 +177,28 @@ insertions and evictions, the incrementally maintained `nearest_id`,
 the edited sample set. The suite also covers neighbour identification vs. full
 Delaunay, the eviction priority tiers, the budget tracker, and the `correct`
 frame including the FPS fallback.
+
+## Profiling
+
+```bash
+../venv/bin/python profile_correct.py
+```
+
+Benchmarks the O(N·M) cost that one-hop updates exist to avoid against the
+updates themselves, at N=100 k, M=256:
+
+| Row | What it times |
+|---|---|
+| `from_cloud (full build)` | Cold-start full pass — `CorrectionState.from_cloud(P, S)`. |
+| `compute_stats (full recompute)` | The O(N·M) pass `insert`/`evict` are designed to skip. |
+| `state.insert (one-hop)` | One insertion plus its one-hop neighbour rebuild. |
+| `state.evict (one-hop)` | One eviction plus its one-hop reassignment. |
+| `correct (within budget)` | A full diagnose-and-patch frame, capped at `MAX_EDITS` (8) insertions/evictions each. |
+
+`insert`/`evict` resolve Delaunay neighbours via scipy/Qhull — a CPU-bound cost
+that's largely independent of `N`. That makes the one-hop-vs-full-recompute
+ratio **scale- and device-dependent**: on CPU, where `compute_stats` itself is
+expensive, one-hop updates win outright; on GPU at this `N`/`M`, `compute_stats`
+gets cheap enough that the fixed Qhull cost can dominate instead. The crossover
+shifts with `N` — one-hop's advantage returns once the full O(N·M) pass is
+costly enough to outweigh Qhull's fixed overhead.

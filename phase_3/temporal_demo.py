@@ -39,9 +39,8 @@ sys.path.insert(0, os.path.join(_HERE, "..", "phase_1"))
 sys.path.insert(0, os.path.join(_HERE, "..", "phase_2"))
 sys.path.insert(0, os.path.join(_HERE, ".."))
 
-from data_io import list_frames, load_lidar_bin   # noqa: E402
+from data_io import list_frames, load_lidar_bin, chamfer_distance  # noqa: E402
 from fps import farthest_point_sampling             # noqa: E402
-from primitives import cell_membership              # noqa: E402
 from correct import correct                         # noqa: E402
 
 NUM_SAMPLES = 64
@@ -61,6 +60,10 @@ def main():
     ap.add_argument("--coverage-factor", type=float, default=2.0)
     ap.add_argument("--separation-factor", type=float, default=0.5)
     ap.add_argument("--min-occupancy", type=int, default=1)
+    ap.add_argument("--baseline", action="store_true",
+                    help="Also FPS-rebuild each frame at equal M and report the "
+                         "chamfer ratio (corrected / fresh). >1 means reuse is "
+                         "worse than rebuilding.")
     ap.add_argument("--out", default="temporal_demo.png")
     args = ap.parse_args()
 
@@ -76,25 +79,27 @@ def main():
     P = load(paths[0])
     S = P[farthest_point_sampling(P, args.samples, seed=42)].clone()
     print(f"\n  {args.dataset}  frames {args.start}..{args.start + len(paths) - 1}"
-          f"  ·  {args.dims}-D  ·  M0={S.shape[0]} samples\n")
+          f"  ·  {args.dims}-D  ·  M0={S.shape[0]} samples")
+    print("  chamfer(corrected S, actual cloud) = coverage (cloud→S) + "
+          "faithfulness (S→cloud), metres\n")
+    base_cols = f" {'fps_cham':>9} {'ratio':>6}" if args.baseline else ""
     header = (f"  {'frame':>5} {'pts':>7} {'M':>4} {'edits':>6} {'ins':>4} "
-              f"{'evt':>4} {'misfit_mean':>11} {'misfit_max':>10}  note")
+              f"{'evt':>4} {'cover':>7} {'faith':>7} {'chamfer':>8}{base_cols}  note")
     print(header)
     print("  " + "─" * (len(header) - 2))
+    # Frame 0 baseline: the fresh FPS sampling vs its own cloud.
+    cham0, cov0, fai0 = chamfer_distance(P, S)
+    base_pad = f"{'-':>9} {'-':>6}" if args.baseline else ""
     print(f"  {args.start:>5} {P.shape[0]:>7} {S.shape[0]:>4} {'-':>6} {'-':>4} "
-          f"{'-':>4} {'-':>11} {'-':>10}  FPS baseline")
+          f"{'-':>4} {cov0:>7.3f} {fai0:>7.3f} {cham0:>8.3f}"
+          f"{(' ' + base_pad) if args.baseline else ''}  FPS baseline")
 
     rec = {k: [] for k in
            ("frame", "pts", "M", "edits", "ins", "evt",
-            "misfit_mean", "misfit_max", "fallback")}
+            "cover", "faith", "chamfer", "fps_cham", "ratio", "fallback")}
 
     for t in range(1, len(paths)):
         P = load(paths[t])
-
-        # Pre-correction misfit: how well do the carried-forward samples already
-        # cover this new cloud? (distance from each new point to nearest sample)
-        _, d = cell_membership(P, S)
-        misfit_mean, misfit_max = float(d.mean()), float(d.max())
 
         res = correct(
             P, S,
@@ -106,10 +111,22 @@ def main():
         )
         S = res.S  # carry the corrected sampling into the next frame
 
+        # Headline metric: how close is the corrected sampling to the actual cloud?
+        cham, cov, fai = chamfer_distance(P, S)
+
+        base_str = ""
+        fps_cham = ratio = float("nan")
+        if args.baseline:
+            # Fair fight: fresh FPS at the SAME sample count on this frame.
+            Sf = P[farthest_point_sampling(P, S.shape[0], seed=42)]
+            fps_cham, _, _ = chamfer_distance(P, Sf)
+            ratio = cham / fps_cham if fps_cham > 0 else float("nan")
+            base_str = f" {fps_cham:>9.3f} {ratio:>6.2f}"
+
         note = "FULL FPS REBUILD" if res.fallback else ""
         print(f"  {args.start + t:>5} {P.shape[0]:>7} {S.shape[0]:>4} "
               f"{res.n_requested:>6} {res.n_inserted:>4} {res.n_evicted:>4} "
-              f"{misfit_mean:>11.3f} {misfit_max:>10.3f}  {note}")
+              f"{cov:>7.3f} {fai:>7.3f} {cham:>8.3f}{base_str}  {note}")
 
         rec["frame"].append(args.start + t)
         rec["pts"].append(P.shape[0])
@@ -117,8 +134,11 @@ def main():
         rec["edits"].append(res.n_requested)
         rec["ins"].append(res.n_inserted if not res.fallback else 0)
         rec["evt"].append(res.n_evicted if not res.fallback else 0)
-        rec["misfit_mean"].append(misfit_mean)
-        rec["misfit_max"].append(misfit_max)
+        rec["cover"].append(cov)
+        rec["faith"].append(fai)
+        rec["chamfer"].append(cham)
+        rec["fps_cham"].append(fps_cham)
+        rec["ratio"].append(ratio)
         rec["fallback"].append(res.fallback)
 
     _plot(rec, args)
@@ -152,17 +172,24 @@ def _plot(rec, args):
     ax0.legend(fontsize=8, loc="upper right")
     ax0.grid(axis="y", alpha=0.3)
 
-    # ── Bottom: pre-correction misfit (continuous companion) ──────────────────
-    mm = np.array(rec["misfit_mean"])
-    mx = np.array(rec["misfit_max"])
-    ax1.plot(f, mx, color="darkorange", lw=1.5, marker="o", ms=3,
-             label="max misfit")
-    ax1.plot(f, mm, color="steelblue", lw=1.5, marker="o", ms=3,
-             label="mean misfit")
-    ax1.set_ylabel("dist. of new cloud\nto previous samples (m)")
+    # ── Bottom: chamfer of the corrected sampling vs the actual cloud ─────────
+    cham = np.array(rec["chamfer"])
+    cover = np.array(rec["cover"])
+    faith = np.array(rec["faith"])
+    ax1.plot(f, cham, color="purple", lw=1.8, marker="o", ms=3,
+             label="chamfer (corrected ↔ cloud)")
+    ax1.plot(f, cover, color="steelblue", lw=1.2, ls="--",
+             label="• coverage (cloud→S)")
+    ax1.plot(f, faith, color="seagreen", lw=1.2, ls="--",
+             label="• faithfulness (S→cloud)")
+    if np.isfinite(rec["fps_cham"]).any():
+        fps_cham = np.array(rec["fps_cham"])
+        ax1.plot(f, fps_cham, color="0.4", lw=1.5, ls=":",
+                 marker="s", ms=3, label="fresh FPS rebuild (equal M)")
+    ax1.set_ylabel("chamfer distance (m)")
     ax1.set_xlabel("frame index")
-    ax1.set_title("Pre-correction misfit — how badly last frame's samples fit "
-                  "the new cloud")
+    ax1.set_title("Corrected sampling vs. actual cloud "
+                  "(lower = closer; gap to dotted line = cost of reuse)")
     ax1.legend(fontsize=8, loc="upper right")
     ax1.grid(alpha=0.3)
 
