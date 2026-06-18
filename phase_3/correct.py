@@ -1,48 +1,3 @@
-"""
-Phase 3 — correction unit.
-
-Phase 2 *diagnoses* a sampling: it flags coverage gaps (under-sampled cells),
-separation violators (redundant, too-close samples) and vanishing cells (samples
-that represent almost nothing).  Phase 3 *acts* on those flags — it edits the
-sample set and keeps the Voronoi bookkeeping up to date without re-running the
-expensive full nearest-neighbour pass.
-
-It does four things:
-
-    1. Insertion       — add a candidate sample p and work out which existing
-                         samples become Delaunay neighbours of its new cell.
-    2. Eviction        — remove samples in a priority order: vanished first,
-                         then underpopulated, then smallest covering radius.
-    3. One-hop update  — after an edit, recompute only the affected neighbour
-                         cells (membership / occupancy / covering radius), never
-                         the whole cloud.
-    4. Budget tracking — count edits per frame; if a frame needs more edits than
-                         the budget allows, give up on patching and fall back to
-                         a fresh full FPS resample.
-
-Why one-hop updates are correct
---------------------------------
-Adding a single site p can only steal cloud points from the cells that border
-p's new cell — i.e. p's Delaunay neighbours (its nearest existing sample is
-always one of them).  No point in a non-adjacent cell can suddenly be closer to
-p.  So we only re-examine the members of those cells, and a re-examined point
-either stays put or moves to p.
-
-Removing a site e hands e's cell back to e's former Delaunay neighbours — every
-orphaned point's new owner is one of them.  So we only reassign e's points, and
-only among e's one-hop neighbourhood.
-
-These properties make the incremental update *exact* (it matches a full
-recompute) as long as the Delaunay neighbours are exact, which they are because
-we lean on Phase 1's ``delaunay_neighbors`` (scipy/Qhull) — the same
-"correct-now, GPU-later" stance as the earlier phases.  The only cheap O(N)
-operation left per edit is an ``isin`` mask to gather the affected members; the
-costly O(N·M) distance work is avoided.
-
-Conventions match Phases 1–2: ``int64`` ids, ``float32`` distances,
-lowest-index tie-breaks, outputs on the input device.
-"""
-
 import os
 import sys
 from dataclasses import dataclass
@@ -65,8 +20,7 @@ from fused import (                                              # noqa: E402
 )
 
 
-def _accurate_cell_stats(P: torch.Tensor, S: torch.Tensor,
-                         nearest_id: torch.Tensor):
+def _accurate_cell_stats(P: torch.Tensor, S: torch.Tensor, nearest_id: torch.Tensor):
     """Per-point distance + per-cell occupancy/radius for a *fixed* assignment.
 
     Distances use a direct norm rather than ``cdist``: ``cdist`` switches to a

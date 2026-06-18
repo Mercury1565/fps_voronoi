@@ -266,11 +266,23 @@ Flags, in addition to `--dataset` / `--dims` / `--max-range` / `--min-z` above:
 |---|---|
 | `--num-frames N` | How many consecutive frames to process. |
 | `--start I` | First frame index. |
-| `--samples M` | Initial FPS sample count (default 64). |
+| `--samples M` | Target FPS sample count (default 64). |
+| `--fixed-samples` / `--no-fixed-samples` | Hold the sample count constant at `--samples` every frame (**default on**), or let it drift as insertions/evictions fall out. See below. |
 | `--budget B` | Max edits/frame before a full FPS rebuild (default 40). |
 | `--coverage-factor`, `--separation-factor`, `--min-occupancy` | Detector thresholds. |
-| `--baseline` | Also rebuild a fresh FPS each frame and report the chamfer ratio. |
+| `--baseline` | Also rebuild a fresh FPS each frame and report `fps_cham`, the `ratio`, and the `direct` distance. |
 | `--out PATH` | Output plot path (default `temporal_demo.png`). |
+
+**Holding the sample count constant.** By default the demo pins the sample count
+at `--samples` (e.g. 64) on *every* frame. `correct()` itself inserts and evicts
+independently, so left alone the count drifts (evictions tend to outpace
+insertions). After each correction the demo re-pins it: if `S` came back short it
+**tops up the worst-covered spots** (an FPS continuation), and if it came back
+over it **drops the most-redundant samples** (closest-pair first). The `edits` /
+`ins` / `evt` columns still report the *raw* correction (the scene-change signal);
+`M` is then restored to the target — so `M` reads a constant 64 throughout, and
+`fps_cham` is always a fair fight at that same count. Pass `--no-fixed-samples` to
+watch the count drift instead.
 
 ### Patch vs. rebuild: the budget threshold
 
@@ -290,56 +302,76 @@ reuse the previous samples or rebuild from scratch:
   incrementally. The budget is a **fixed integer you choose** (default 40) — a
   compute ceiling, *not* derived from the data.
 
-### The chamfer quality metric
+### How to read the output
 
-Few requested edits could mean the scene is genuinely static — or it could mean
-the carried sampling has quietly gone stale while the *relative* detector
-thresholds float along with it. To check that the reused sampling really does
-stay close to the cloud, each frame reports the **Chamfer distance between the
-corrected samples `S` and the actual cloud `P`**.
+Each row is one frame. The columns answer three separate questions, and it is
+easiest to read them in those groups rather than left to right.
 
-It uses the same symmetric definition as the `extract/` pipeline (mean of L2
-nearest-neighbour distances in both directions), but is reported **split into its
-two directed halves**, because with one side a cloud and the other a sample set
-they catch different failure modes:
+**A worked example.** Take this row from a real KITTI run (with `--baseline`):
 
-| Half | Direction | Meaning |
+```
+ frame     pts    M  edits  ins  evt  chamfer  fps_cham  ratio   direct  note
+    10   37721   54      1    0    1    5.511     2.521   2.19    6.912
+```
+
+Read it as: *frame 10 has 37,721 points; we are now carrying 54 samples; this
+frame applied 1 patch (added 0, dropped 1); the carried sampling sits 5.51 m from
+the cloud, while a fresh FPS rebuild at the same 54 samples sits only 2.52 m —
+so reuse is **2.19× worse** here.*
+
+**Question 1 — how much did the scene change?** (`edits`, `ins`, `evt`)
+
+`edits = ins + evt` is the headline signal: how many samples had to be patched to
+keep up with the new frame. A near-static scene needs ~0; a fast-changing one
+needs many. `ins` are samples **added** where new structure appeared; `evt` are
+samples **removed** where a region emptied out or went redundant. `edits` is also
+what gets compared against `--budget`.
+
+**Question 2 — how good is the sampling, and is reuse worth it?**
+(`chamfer`, `fps_cham`, `ratio` — distances in **metres, lower = closer**)
+
+All three are built on the **Chamfer distance**: the mean L2 distance from each
+point in one set to its nearest point in the other, averaged in both directions.
+Crucially, every quality number is measured **against the cloud `P`**, because the
+cloud is the unique, dense thing the sampling is trying to represent — judging two
+sparse sample sets against each other instead would mostly measure *which points
+they happened to pick*, not how well they cover the scene.
+
+| Column | Between | Meaning |
 |---|---|---|
-| **cover** | cloud → S | **Coverage error**: how far the typical cloud point is from any sample (under-sampling). |
-| **faith** | S → cloud | **Faithfulness error**: how far a sample sits from any real point — large for **stale** samples carried from old frames that no longer correspond to anything in the scene. |
+| `chamfer` | `P` ↔ carried `S` | How far the **reused / patched** sampling is from the current cloud. |
+| `fps_cham` | `P` ↔ fresh `Sf` | How far a **from-scratch FPS** at the same `M` is from the same cloud — the best achievable at this budget (a fair fight). |
+| `ratio` | `chamfer / fps_cham` | The punchline: **1.0 = reuse is as good as rebuilding; 2.0 = reuse sits twice as far from the cloud.** |
 
-`chamfer = cover + faith`, in metres. For a *fresh* FPS sampling `faith ≈ 0`,
-because the samples literally *are* cloud points.
+`fps_cham`, `ratio` and `direct` are shown only with **`--baseline`** (it builds
+the extra fresh FPS each frame).
 
-With **`--baseline`**, each frame also rebuilds a fresh FPS sampling **at the same
-`M`** (a fair fight — same number of samples) and reports its chamfer
-(`fps_cham`) and the **`ratio = chamfer / fps_cham`**. A ratio `> 1` means the
-reused sampling is worse than rebuilding from scratch.
+**Question 3 — why *not* compare the two sample sets directly?** (`direct`)
 
-### The output columns
+`direct` is the Chamfer distance **between the two sample sets**, carried `S` ↔
+fresh `Sf` — the seemingly-obvious "how close is the correction to a rebuild?"
+number. It is included **only as a cautionary comparison**: in practice it runs
+*higher than either cloud-grounded distance* (≈ 5–7 m vs. `chamfer` ≈ 3–5 and
+`fps_cham` ≈ 2.5). That inflation is **alignment noise**, not real error — FPS has
+many equally-good solutions, so `S` and `Sf` pick different (but equally valid)
+points, and comparing them directly penalises that arbitrary disagreement. This
+is exactly why the quality verdict uses `ratio` (both sides grounded on `P`) and
+not `direct`.
 
-Each row of the table is one frame in the sequence:
+**The remaining bookkeeping columns:**
 
 | Column | What it is |
 |---|---|
 | `frame` | Frame index in the dataset (`--start` offsets it). Row 0 is the FPS baseline. |
 | `pts` | Points in this frame's cloud `P` after `--max-range` / `--min-z`. Varies as the scene changes. |
 | `M` | Sample count *after* this frame's correction. Starts at `--samples`; drifts as insertions add and evictions remove samples. |
-| `edits` | `n_requested` = `ins + evt`, the corrections the frame asked for — the headline "how much did the scene change" signal, and what is compared against `--budget`. |
-| `ins` | Insertions applied — samples added at coverage gaps (new structure the carried samples didn't cover). |
-| `evt` | Evictions applied — samples removed because their cells vanished or went redundant. |
-| `cover` | Chamfer half, cloud → S: coverage error (metres). |
-| `faith` | Chamfer half, S → cloud: faithfulness / staleness (metres). |
-| `chamfer` | `cover + faith` — the corrected sampling vs. the actual cloud (metres). |
-| `fps_cham` | *(`--baseline` only)* chamfer of a fresh FPS rebuild at the same `M`. |
-| `ratio` | *(`--baseline` only)* `chamfer / fps_cham`; `> 1` means reuse is worse than a rebuild. |
 | `note` | `FPS baseline` on frame 0; `FULL FPS REBUILD` if the budget was exceeded that frame. |
 
 The generated plot has two stacked panels: **(top)** edits requested per frame
 (insertions vs. evictions, with the budget line and any rebuilds marked), and
-**(bottom)** the corrected sampling's chamfer over time, broken into its
-coverage/faithfulness halves, with the fresh-FPS baseline overlaid when
-`--baseline` is used.
+**(bottom)** the three chamfer distances over time — `P`↔`S`, `P`↔`Sf`, and the
+`direct` `S`↔`Sf` — with the `ratio` drawn on a secondary axis (only with
+`--baseline`).
 
 ### What the experiments show
 
@@ -352,16 +384,22 @@ coverage/faithfulness halves, with the fresh-FPS baseline overlaid when
   than diverging.
 - **But reuse is not free.** With `--baseline`, the chamfer `ratio` settles around
   **~2.0** — the reused sampling sits about twice as far from the cloud as a fresh
-  rebuild of the same size. The decomposition pinpoints *why*: the `faith`
-  (staleness) term climbs from ~0 to ~2 m, accounting for most of the gap,
-  because carried samples drift to spots the scene no longer occupies.
-- **Caveat — the relative thresholds can hide coarsening.** Because a "coverage
-  gap" is measured relative to each frame's own median cell size, as the sample
-  count drifts down (e.g. 64 → ~40 over a run, since evictions tend to outpace
-  insertions) the cells grow and the gap bar rises with them. The system can
-  converge to a *coarser* sampling and still report "≈0 edits needed"; the
-  chamfer metric is what exposes this. Pinning an absolute coverage threshold, or
-  holding `M` constant, pulls the chamfer back down toward the fresh-FPS baseline.
+  rebuild of the same size. The cause is **staleness**: carried samples drift to
+  spots the scene no longer occupies, so `chamfer` (P↔S) climbs while `fps_cham`
+  (P↔Sf) stays flat at ~2.5 m.
+- **Don't be fooled by the `direct` column.** The direct carried-vs-fresh distance
+  (`S`↔`Sf`) runs *higher* than either cloud-grounded distance, because FPS has
+  many equally-good solutions and the two sets simply pick different points. That
+  gap is alignment noise, not correction error — which is why the verdict is the
+  `ratio` of cloud-grounded distances, not `direct`.
+- **Holding `M` constant removes the coarsening.** With `--no-fixed-samples` the
+  count drifts down (e.g. 64 → ~40 over a run, since evictions outpace
+  insertions); the cells grow and `chamfer` climbs steadily (to ~5.7 m by frame
+  25). With the default `--fixed-samples` the count stays at 64, and `chamfer`
+  plateaus instead of climbing (~3.8 m), because samples are topped back up at the
+  worst-covered spots. The `ratio` still sits ~1.5–2.0 — that residual is
+  **staleness** (carried samples drifting onto empty space), not sample-count
+  loss, so a fresh rebuild at equal `M` remains meaningfully closer to the cloud.
 
 ---
 
