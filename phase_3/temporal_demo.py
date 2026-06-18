@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.join(_HERE, ".."))
 from data_io import list_frames, load_lidar_bin, chamfer_distance  # noqa: E402
 from fps import farthest_point_sampling             # noqa: E402
 from correct import correct                         # noqa: E402
-
-NUM_SAMPLES = 1024
+import config                                        # noqa: E402
 
 def _resize_to(P, S, target):
     """Hold the sample count at exactly ``target``.
@@ -49,18 +48,19 @@ def main():
     ap.add_argument("--dataset", choices=["nuscenes", "kitti"], default="nuscenes")
     ap.add_argument("--start", type=int, default=0, help="First frame index")
     ap.add_argument("--num-frames", type=int, default=30)
-    ap.add_argument("--dims", type=int, choices=[2, 3], default=3)
-    ap.add_argument("--max-range", type=float, default=40.0)
-    ap.add_argument("--min-z", type=float, default=-1.5)
-    ap.add_argument("--samples", type=int, default=NUM_SAMPLES)
+    ap.add_argument("--dims", type=int, choices=[2, 3], default=config.DIMS)
+    ap.add_argument("--max-range", type=float, default=config.MAX_RANGE)
+    ap.add_argument("--min-z", type=float, default=config.MIN_Z)
+    ap.add_argument("--samples", type=int, default=config.SAMPLES)
     ap.add_argument("--fixed-samples", action=argparse.BooleanOptionalAction,
                     default=True,
                     help="Hold the sample count constant at --samples every frame "
                          "(top up worst-covered spots / trim most-redundant samples "
                          "after each correction). Use --no-fixed-samples to let M "
                          "drift as insertions/evictions fall out.")
-    ap.add_argument("--budget", type=int, default=40,
-                    help="Max edits/frame before falling back to full FPS.")
+    ap.add_argument("--budget", type=int, default=config.BUDGET,
+                    help="Max edits/frame before falling back to full FPS "
+                         "(scale up with --samples).")
     ap.add_argument("--coverage-factor", type=float, default=2.0)
     ap.add_argument("--separation-factor", type=float, default=0.5)
     ap.add_argument("--min-occupancy", type=int, default=1)
@@ -212,7 +212,6 @@ def _plot(rec, args):
         plt.show()
     except Exception:
         pass
-
 
 if __name__ == "__main__":
     main()

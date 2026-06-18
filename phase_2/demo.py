@@ -30,8 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from data_io import load_lidar_bin, load_frame  # noqa: E402
 from demo import generate_mimic_2d, _voronoi_finite_segments  # noqa: E402
 from fused import analyze  # noqa: E402
-
-NUM_SAMPLES = 64
+import config  # noqa: E402
 
 
 def build_imperfect_samples(P: torch.Tensor, m: int, n_stray: int = 4, seed: int = 0):
@@ -70,13 +69,13 @@ def main():
                         help="Load a real frame from data/<dataset> by index.")
     parser.add_argument("--frame", type=int, default=0,
                         help="Frame index within --dataset (default: 0)")
-    parser.add_argument("--dims", type=int, choices=[2, 3], default=3,
+    parser.add_argument("--dims", type=int, choices=[2, 3], default=config.DIMS,
                         help="Run the engine in 3-D (x,y,z) or 2-D top-down (x,y).")
     parser.add_argument("--max-range", type=float, default=None,
                         help="Drop points beyond this horizontal radius (m).")
     parser.add_argument("--min-z", type=float, default=None,
                         help="Drop points below this height (rough ground removal).")
-    parser.add_argument("--samples", type=int, default=NUM_SAMPLES)
+    parser.add_argument("--samples", type=int, default=config.SAMPLES)
     parser.add_argument("--coverage-factor", type=float, default=1.6)
     parser.add_argument("--separation-factor", type=float, default=0.45)
     parser.add_argument("--min-occupancy", type=int, default=1)

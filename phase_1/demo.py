@@ -17,8 +17,7 @@ from primitives import (
     delaunay_neighbors,
     min_pairwise_distance,
 )
-
-NUM_SAMPLES = 64
+import config
 
 
 def generate_mimic_2d(N: int = 10_000, seed: int = 42) -> torch.Tensor:
@@ -100,15 +99,16 @@ def main():
                         help="Load a real frame from data/<dataset> by index.")
     parser.add_argument("--frame", type=int, default=0,
                         help="Frame index within --dataset (default: 0)")
-    parser.add_argument("--dims", type=int, choices=[2, 3], default=3,
+    parser.add_argument("--dims", type=int, choices=[2, 3], default=config.DIMS,
                         help="Run the engine in 3-D (x,y,z) or 2-D top-down (x,y). "
-                             "Default: 3 for real data.")
+                             f"Default: {config.DIMS} (config DIMS).")
     parser.add_argument("--max-range", type=float, default=None,
                         help="Drop points beyond this horizontal radius (m).")
     parser.add_argument("--min-z", type=float, default=None,
                         help="Drop points below this height (rough ground removal).")
-    parser.add_argument("--samples", type=int, default=NUM_SAMPLES,
-                        help="Number of FPS samples (default: 64)")
+    parser.add_argument("--samples", type=int, default=config.SAMPLES,
+                        help=f"Number of FPS samples (default: {config.SAMPLES}, "
+                             "config SAMPLES)")
     args = parser.parse_args()
 
     dims = args.dims

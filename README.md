@@ -403,6 +403,34 @@ The generated plot has two stacked panels: **(top)** edits requested per frame
 
 ---
 
+## Configuration (`config.py` + `.env`)
+
+The defaults that used to be duplicated across the demos (sample count, crop,
+budget, …) now live in one place: **`config.py`**. Each value resolves in this
+order, first match wins:
+
+1. a **command-line flag** (e.g. `--samples 128`) — always highest priority;
+2. an **OS environment variable** (e.g. `SAMPLES=128 python phase_3/...`);
+3. a **`KEY=VALUE` line in a `.env`** file at the repo root;
+4. the **built-in default** in `config.py`.
+
+To change defaults without touching code, copy the template and edit it:
+
+```bash
+cp .env.example .env      # then edit .env
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SAMPLES` | `64` | FPS sample count `M`, used by **all** demos. |
+| `DIMS` | `3` | `2` = top-down view, `3` = full 3-D. |
+| `MAX_RANGE` | `40` | Horizontal crop radius, metres (temporal demo default). |
+| `MIN_Z` | `-1.5` | Ground-removal height, metres (temporal demo default). |
+| `BUDGET` | `40` | Max edits/frame before a full FPS rebuild — **scale this up with `SAMPLES`** (at `M=1024` it must be in the hundreds, or the loop rebuilds from scratch every frame). |
+
+`.env` is git-ignored (your local overrides stay local); `.env.example` is the
+committed template.
+
 ## Trying it out
 
 All phases share a single virtual environment at the repo root. Set it up once:
