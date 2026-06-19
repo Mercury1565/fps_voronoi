@@ -32,6 +32,7 @@ def main():
     ap.add_argument("--dims", type=int, choices=[2, 3], default=config.DIMS)
     ap.add_argument("--max-range", type=float, default=config.MAX_RANGE)
     ap.add_argument("--min-z", type=float, default=config.MIN_Z)
+    config.add_crop_args(ap)
     ap.add_argument("--samples", type=int, default=config.SAMPLES)
     # ── validity thresholds (data-adaptive: factor x median sample spacing) ──
     ap.add_argument("--min-occupancy", type=int, default=1,
@@ -54,7 +55,8 @@ def main():
 
     def load(path):
         return load_lidar_bin(path, dims=args.dims,
-                              max_range=args.max_range, min_z=args.min_z)
+                              max_range=args.max_range, min_z=args.min_z,
+                              **config.crop_kwargs(args))
 
     def thresholds(S):
         """Turn the relative factors into absolute metres for this frame."""
@@ -74,17 +76,17 @@ def main():
 
     base_cols = f" {'fps_cham':>9} {'ratio':>6} {'direct':>7}" if args.baseline else ""
     header = (f"  {'frame':>5} {'pts':>7} {'M':>5} {'kept':>5} {'drop':>5} "
-              f"{'refill':>6} {'chamfer':>8}{base_cols}")
+              f"{'refill':>6} {'carried_over_chamfer':>20}{base_cols}")
     print(header)
     print("  " + "─" * (len(header) - 2))
 
     cham0, _, _ = chamfer_distance(P, S)
     base_pad = f"{'-':>9} {'-':>6} {'-':>7}" if args.baseline else ""
     print(f"  {args.start:>5} {P.shape[0]:>7} {S.shape[0]:>5} {'-':>5} {'-':>5} "
-          f"{'-':>6} {cham0:>8.3f}{(' ' + base_pad) if args.baseline else ''}")
+          f"{'-':>6} {cham0:>20.3f}{(' ' + base_pad) if args.baseline else ''}")
 
     rec = {k: [] for k in ("frame", "kept", "drop", "refill",
-                           "chamfer", "fps_cham", "ratio", "direct")}
+                           "carried_over_chamfer", "fps_cham", "ratio", "direct_fps")}
 
     for t in range(1, len(paths)):
         P = load(paths[t])
@@ -101,26 +103,26 @@ def main():
         cham, _, _ = chamfer_distance(P, S)
 
         base_str = ""
-        fps_cham = ratio = direct = float("nan")
+        fps_cham = ratio = direct_fps = float("nan")
         if args.baseline:
             Sf = fps_continue(P, None, args.samples, seed=42)   # cold rebuild, equal M
             fps_cham, _, _ = chamfer_distance(P, Sf)
             ratio = cham / fps_cham if fps_cham > 0 else float("nan")
-            direct, _, _ = chamfer_distance(S, Sf)
-            base_str = f" {fps_cham:>9.3f} {ratio:>6.2f} {direct:>7.3f}"
+            direct_fps, _, _ = chamfer_distance(S, Sf)
+            base_str = f" {fps_cham:>9.3f} {ratio:>6.2f} {direct_fps:>7.3f}"
 
         print(f"  {args.start + t:>5} {P.shape[0]:>7} {S.shape[0]:>5} "
               f"{res.n_kept:>5} {res.n_dropped:>5} {res.n_refilled:>6} "
-              f"{cham:>8.3f}{base_str}")
+              f"{cham:>20.3f}{base_str}")
 
         rec["frame"].append(args.start + t)
         rec["kept"].append(res.n_kept)
         rec["drop"].append(res.n_dropped)
         rec["refill"].append(res.n_refilled)
-        rec["chamfer"].append(cham)
+        rec["carried_over_chamfer"].append(cham)
         rec["fps_cham"].append(fps_cham)
         rec["ratio"].append(ratio)
-        rec["direct"].append(direct)
+        rec["direct_fps"].append(direct_fps)
 
     _plot(rec, args)
 
@@ -144,13 +146,13 @@ def _plot(rec, args):
     ax0.grid(axis="y", alpha=0.3)
 
     # ── Bottom: chamfer of the warm sampling vs a cold rebuild ────────────────
-    cham = np.array(rec["chamfer"])
+    cham = np.array(rec["carried_over_chamfer"])
     ax1.plot(f, cham, color="purple", lw=1.8, marker="o", ms=3,
              label="chamfer  P ↔ warm S")
     if np.isfinite(rec["fps_cham"]).any():
         ax1.plot(f, np.array(rec["fps_cham"]), color="0.4", lw=1.5, ls=":",
                  marker="s", ms=3, label="chamfer  P ↔ cold FPS (equal M)")
-        ax1.plot(f, np.array(rec["direct"]), color="darkorange", lw=1.3, ls="--",
+        ax1.plot(f, np.array(rec["direct_fps"]), color="darkorange", lw=1.3, ls="--",
                  marker="^", ms=3, label="chamfer  warm S ↔ cold FPS (direct)")
     ax1.set_ylabel("chamfer distance (m)")
     ax1.set_xlabel("frame index")

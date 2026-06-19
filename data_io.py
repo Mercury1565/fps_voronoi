@@ -31,8 +31,15 @@ def load_lidar_bin(
     dims: int = 3,
     max_range: float | None = None,
     min_z: float | None = None,
+    roi_min: tuple[float, float, float] | None = None,
+    roi_max: tuple[float, float, float] | None = None,
+    ego_extent: tuple[float, float, float] | None = None,
 ) -> torch.Tensor:
     """Load one LiDAR frame into a point-cloud tensor.
+
+    All crops below act on the original 3-D (x, y, z) — even when ``dims == 2``,
+    so the z filters still apply to a top-down projection. They are independent
+    masks; passing several just intersects them.
 
     Parameters
     ----------
@@ -42,10 +49,20 @@ def load_lidar_bin(
         ``3`` → keep (x, y, z); ``2`` → top-down (x, y) projection.
     max_range
         If set, drop points whose horizontal (x, y) radius exceeds this many
-        metres. Trims the sparse long-range fringe that bloats covering radii.
+        metres (a **cylinder**). Trims the sparse long-range fringe.
     min_z
         If set, drop points with z below this height (rough ground removal).
-        Applied on the original 3-D z even when ``dims == 2``.
+    roi_min, roi_max
+        If both set, keep only points inside the axis-aligned **box**
+        ``[roi_min, roi_max]`` (each an ``(x, y, z)`` triple, metres). This is a
+        stricter region-of-interest than ``max_range`` — it bounds z at both ends
+        and uses a box rather than a cylinder, which stabilises FPS by removing
+        the far/high/low outliers it would otherwise grab first.
+    ego_extent
+        If set (an ``(x, y, z)`` triple of **half-extents**, metres), drop points
+        inside that cuboid at the origin — the roof-mounted sensor's returns off
+        the ego vehicle itself. Note this is the *inverse* of an ROI crop: points
+        inside the box are removed.
 
     Returns
     -------
@@ -54,6 +71,8 @@ def load_lidar_bin(
     """
     if dims not in (2, 3):
         raise ValueError(f"dims must be 2 or 3, got {dims}")
+    if (roi_min is None) != (roi_max is None):
+        raise ValueError("roi_min and roi_max must be given together (or neither)")
 
     ncols = _num_columns(path)
     pts = np.fromfile(path, dtype=np.float32)
@@ -68,6 +87,13 @@ def load_lidar_bin(
     if max_range is not None:
         r2 = xyz[:, 0] ** 2 + xyz[:, 1] ** 2
         xyz = xyz[r2 <= max_range * max_range]
+    if roi_min is not None:                              # keep inside the ROI box
+        lo = np.asarray(roi_min, dtype=np.float32)
+        hi = np.asarray(roi_max, dtype=np.float32)
+        xyz = xyz[np.all((xyz >= lo) & (xyz <= hi), axis=1)]
+    if ego_extent is not None:                           # drop the ego-vehicle box
+        e = np.asarray(ego_extent, dtype=np.float32)
+        xyz = xyz[~np.all(np.abs(xyz) <= e, axis=1)]
 
     out = xyz if dims == 3 else xyz[:, :2]
     return torch.from_numpy(np.ascontiguousarray(out, dtype=np.float32))

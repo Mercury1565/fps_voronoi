@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--dims", type=int, choices=[2, 3], default=config.DIMS)
     ap.add_argument("--max-range", type=float, default=config.MAX_RANGE)
     ap.add_argument("--min-z", type=float, default=config.MIN_Z)
+    config.add_crop_args(ap)
     ap.add_argument("--samples", type=int, default=config.SAMPLES)
     ap.add_argument("--fixed-samples", action=argparse.BooleanOptionalAction,
                     default=True,
@@ -77,7 +78,8 @@ def main():
 
     def load(path):
         return load_lidar_bin(path, dims=args.dims,
-                              max_range=args.max_range, min_z=args.min_z)
+                              max_range=args.max_range, min_z=args.min_z,
+                              **config.crop_kwargs(args))
 
     # ── Frame 0: fresh FPS baseline ──────────────────────────────────────────
     P = load(paths[0])

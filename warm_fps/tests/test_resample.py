@@ -7,7 +7,7 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from resample import fps_continue, valid_mask, warm_resample  # noqa: E402
+from resample import _cell_stats, fps_continue, valid_mask, warm_resample  # noqa: E402
 
 
 def _grid_cloud(n=40):
@@ -43,9 +43,11 @@ def test_valid_mask_drops_vanished_and_stale():
     P = _grid_cloud()                       # cloud lives in [0,1]^2
     # sample 0 sits on the cloud; sample 1 floats far away (stale + empty cell)
     S = torch.tensor([[0.5, 0.5], [50.0, 50.0]])
-    keep, occ, faith = valid_mask(P, S, min_occupancy=1, stale_dist=1.0)
+    keep = valid_mask(P, S, min_occupancy=1, stale_dist=1.0)
     assert bool(keep[0]) is True
     assert bool(keep[1]) is False           # vanished (occ 0) and stale (faith huge)
+    # the underlying signals still explain why sample 1 was dropped
+    occ, faith = _cell_stats(P, S)
     assert int(occ[1]) == 0
     assert float(faith[1]) > 1.0
 
@@ -54,7 +56,7 @@ def test_valid_mask_drops_redundant_pair():
     P = _grid_cloud()
     # two samples almost on top of each other -> one is redundant
     S = torch.tensor([[0.5, 0.5], [0.5001, 0.5001], [0.1, 0.9]])
-    keep, _occ, _faith = valid_mask(P, S, min_occupancy=1, separation_min=0.05)
+    keep = valid_mask(P, S, min_occupancy=1, separation_min=0.05)
     assert int(keep.sum()) == 2             # exactly one of the close pair dropped
 
 

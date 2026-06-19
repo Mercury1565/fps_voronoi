@@ -106,6 +106,7 @@ def main():
                         help="Drop points beyond this horizontal radius (m).")
     parser.add_argument("--min-z", type=float, default=None,
                         help="Drop points below this height (rough ground removal).")
+    config.add_crop_args(parser)
     parser.add_argument("--samples", type=int, default=config.SAMPLES,
                         help=f"Number of FPS samples (default: {config.SAMPLES}, "
                              "config SAMPLES)")
@@ -115,12 +116,14 @@ def main():
     if args.bin_file:
         print(f"Loading LiDAR frame from {args.bin_file} …")
         P = load_lidar_bin(args.bin_file, dims=dims,
-                           max_range=args.max_range, min_z=args.min_z)
+                           max_range=args.max_range, min_z=args.min_z,
+                           **config.crop_kwargs(args))
         print(f"  Loaded {P.shape[0]:,} points ({dims}-D)")
     elif args.dataset:
         print(f"Loading {args.dataset} frame {args.frame} …")
         P = load_frame(args.dataset, args.frame, dims=dims,
-                       max_range=args.max_range, min_z=args.min_z)
+                       max_range=args.max_range, min_z=args.min_z,
+                       **config.crop_kwargs(args))
         print(f"  Loaded {P.shape[0]:,} points ({dims}-D)")
     else:
         print("No frame provided — generating mimic 2-D LiDAR scene (N≈10,000).")

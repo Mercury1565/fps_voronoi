@@ -194,20 +194,31 @@ Loader options:
 - **`max_range`** — drop points beyond this horizontal radius (metres), trimming
   the sparse long-range fringe that bloats covering radii.
 - **`min_z`** — drop points below this height (rough ground removal).
+- **`roi_min` / `roi_max`** — keep only points inside an axis-aligned **box**
+  (each an `(x, y, z)` triple). A stricter region-of-interest than `max_range`:
+  it bounds z at *both* ends and uses a box rather than a cylinder, removing the
+  far/high/low outliers FPS would otherwise grab first. Typical detection volume:
+  `roi_min=(-50,-50,-3)`, `roi_max=(50,50,3)`.
+- **`ego_extent`** — `(x, y, z)` **half-extents** of a box at the sensor origin;
+  points inside it are dropped. This removes the **ego-vehicle self-returns** a
+  roof-mounted LiDAR produces (e.g. `ego_extent=(0.75, 1.5, 1.0)`). On nuScenes
+  this clears a dense ~14k-point blob sitting on the sensor; on KITTI it is
+  effectively a no-op (the HDL-64E has a near-range blind spot ~1.4 m).
 
-> **Why crop / remove ground?** On raw, uncropped LiDAR, FPS tends to grab the
-> sparse far/high/low outliers as samples and leaves one giant central cell (on a
-> raw nuScenes frame, ≈ 22k of 35k points landed in a single cell). Cropping with
-> `--max-range` and removing the ground with `--min-z` keep the sampling
-> meaningful.
+> **Why crop?** On raw, uncropped LiDAR, FPS tends to grab the sparse far/high/low
+> outliers as samples and leaves one giant central cell (on a raw nuScenes frame,
+> ≈ 22k of 35k points landed in a single cell). The **ROI box + ego removal runs by
+> default** (`ROI_MIN`/`ROI_MAX`/`EGO_EXTENT` in `config.py`) to keep the sampling
+> meaningful — so the commands below need no explicit crop flags. The legacy
+> `--max-range` cylinder / `--min-z` floor remain available as manual overrides.
 
 ### Running the demos on real frames
 
 Both the Phase 1 and Phase 2 demos accept the same set of flags:
 
 ```bash
-# Phase 1 — primitives + visualization on a real nuScenes frame (full 3-D, cropped)
-python phase_1/demo.py --dataset nuscenes --frame 0 --dims 3 --max-range 40 --min-z -1.5
+# Phase 1 — primitives + visualization on a real nuScenes frame (full 3-D; ROI+ego crop is default)
+python phase_1/demo.py --dataset nuscenes --frame 0 --dims 3
 
 # Phase 2 — the three detectors on a real KITTI frame, top-down 2-D
 python phase_2/demo.py --dataset kitti --frame 0 --dims 2
@@ -256,8 +267,7 @@ The number of edits a frame *requests* is the headline difference signal: a
 near-static scene needs almost no edits; a fast-changing one needs many.
 
 ```bash
-python phase_3/temporal_demo.py --dataset kitti --num-frames 30 \
-    --dims 3 --max-range 40 --min-z -1.5
+python phase_3/temporal_demo.py --dataset kitti --num-frames 30 --dims 3
 ```
 
 Flags, in addition to `--dataset` / `--dims` / `--max-range` / `--min-z` above:
@@ -456,8 +466,7 @@ uniformity and simplicity.
 
 ```bash
 # constant M, partial rebuild each frame, compared against a fresh cold FPS
-python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 \
-    --max-range 40 --min-z -1.5 --baseline
+python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 --baseline
 
 python -m pytest warm_fps/tests/ -q
 ```
@@ -514,9 +523,17 @@ cp .env.example .env      # then edit .env
 |---|---|---|
 | `SAMPLES` | `64` | FPS sample count `M`, used by **all** demos. |
 | `DIMS` | `3` | `2` = top-down view, `3` = full 3-D. |
-| `MAX_RANGE` | `40` | Horizontal crop radius, metres (temporal demo default). |
-| `MIN_Z` | `-1.5` | Ground-removal height, metres (temporal demo default). |
 | `BUDGET` | `40` | Max edits/frame before a full FPS rebuild — **scale this up with `SAMPLES`** (at `M=1024` it must be in the hundreds, or the loop rebuilds from scratch every frame). |
+| `ROI_MIN` / `ROI_MAX` | `-50,-50,-3` / `50,50,3` | **Default crop.** Region-of-interest **box** `x,y,z`; keeps only points inside. Both must be set together; set blank to disable. |
+| `EGO_EXTENT` | `0.75,1.5,1` | **Default crop.** Ego-vehicle removal: box half-extents `x,y,z` at the origin; points inside are dropped. Set blank to disable. |
+| `MAX_RANGE` | off | *Optional* legacy cylinder crop — horizontal radius (m). Off by default; if set, intersects with the ROI box (stricter bound wins). |
+| `MIN_Z` | off | *Optional* legacy ground floor (m). Off by default; if set, intersects with the ROI box. |
+
+The **ROI box + ego-vehicle removal is the default preprocessing** (it stabilises
+FPS — see "Working with real LiDAR data"). The older `MAX_RANGE` cylinder / `MIN_Z`
+floor are off by default and kept only as manual overrides. All five also accept
+CLI flags (`--roi-min`, `--roi-max`, `--ego-extent`, `--max-range`, `--min-z`),
+which override the env/`.env` values as usual.
 
 `.env` is git-ignored (your local overrides stay local); `.env.example` is the
 committed template.
@@ -572,23 +589,21 @@ source venv/bin/activate
 
 # ── Phase 1 — primitives, tests, demo ───────────────────────────────────────
 python phase_1/demo.py                                   # synthetic 2-D scene
-python phase_1/demo.py --dataset nuscenes --dims 3 --max-range 40 --min-z -1.5
+python phase_1/demo.py --dataset nuscenes --dims 3       # ROI+ego crop is default
 python -m pytest phase_1/tests/ -q
 
 # ── Phase 2 — fused pipeline, detectors, visualization ───────────────────────
 python phase_2/demo.py                                   # renders phase2_demo.png
-python phase_2/demo.py --dataset kitti --frame 0 --dims 3 --max-range 40 --min-z -1.5
+python phase_2/demo.py --dataset kitti --frame 0 --dims 3
 python -m pytest phase_2/tests/ -q
 
 # ── Phase 3 — correction unit + temporal loop ───────────────────────────────
 python -m pytest phase_3/tests/ -q
-python phase_3/temporal_demo.py --dataset kitti --num-frames 30 \
-    --dims 3 --max-range 40 --min-z -1.5 --baseline
+python phase_3/temporal_demo.py --dataset kitti --num-frames 30 --dims 3 --baseline
 
 # ── warm_fps — partial-rebuild alternative to Phase 3 ────────────────────────
 python -m pytest warm_fps/tests/ -q
-python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 \
-    --max-range 40 --min-z -1.5 --baseline
+python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 --baseline
 ```
 
 > **Tip:** run the test suites one phase at a time. Each phase has its own

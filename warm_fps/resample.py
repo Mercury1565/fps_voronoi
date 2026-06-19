@@ -49,7 +49,8 @@ def valid_mask(
                          of a too-close pair the lower-occupancy one is dropped
                          (only checked when ``separation_min`` is given).
 
-    Returns ``(keep, occupancy, faith)``.
+    Returns the boolean keep-mask over ``S``. (The underlying occupancy / faith
+    signals are available from :func:`_cell_stats` if needed.)
     """
     M = S.shape[0]
     occupancy, faith = _cell_stats(P, S)
