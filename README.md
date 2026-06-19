@@ -403,6 +403,96 @@ The generated plot has two stacked panels: **(top)** edits requested per frame
 
 ---
 
+## An alternative to Phase 3 — warm-started FPS (`warm_fps/`)
+
+Phase 3 keeps a carried sampling healthy by **editing** it: explicit insertions,
+evictions, and one-hop Voronoi updates under a budget. The `warm_fps/` module
+takes a different route (suggested in discussion) — treat every frame as a
+**partial rebuild** instead of a patch:
+
+1. **classify** — judge which carried samples are still valid for the new cloud;
+2. **keep** — drop the invalid ones, keep the survivors as FPS **seeds**;
+3. **refill** — continue Farthest-Point Sampling *from those seeds* until the
+   count is back to `M`, so the fresh samples land in the worst-covered gaps
+   (including the holes the dropped samples left behind).
+
+```
+   carried samples S_prev ─┐
+                           ▼
+   1. classify   valid_mask(P, S_prev)        which carried samples are still valid?
+                           │                  drop: vanished · stale · redundant
+                           ▼
+   2. keep       S_valid = S_prev[keep]       the survivors become FPS seeds
+                           │
+                           ▼
+   3. refill     fps_continue(P, S_valid, M)  greedy FPS from the seeds up to M
+                           ▼
+                    new samples S  (exactly M)
+```
+
+A carried sample is dropped when it is:
+
+| Reason | Test | Meaning |
+|---|---|---|
+| **vanished** | cell occupancy `< min_occupancy` | nothing maps to it any more |
+| **stale** | distance to nearest cloud point `> stale_dist` | it floats in empty space the scene left behind |
+| **redundant** | within `separation_min` of another kept sample | two samples doing one sample's job |
+
+The fraction that survives is the **validity fraction** — a single smooth knob.
+A static scene keeps almost everything (tiny refill, nearly free); a fast-changing
+scene keeps little (large refill, approaching a full rebuild); zero valid ⇒ it
+*is* a cold rebuild. There is **no patch-or-rebuild branch and no edit budget** —
+that whole decision collapses into one continuum.
+
+**How it differs from Phase 3.** It deliberately does **no incremental Voronoi
+bookkeeping** (every frame recomputes the assignment from scratch — FPS produces
+it as it runs) and **never moves a sample** (a carried sample is kept or dropped,
+never nudged). The only state carried between frames is the sample positions `S`.
+This is simpler and keeps `M` constant by construction, but costs ~full-rebuild
+compute each frame — it trades Phase 3's "cheap when stable" property for
+uniformity and simplicity.
+
+### Running it
+
+```bash
+# constant M, partial rebuild each frame, compared against a fresh cold FPS
+python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 \
+    --max-range 40 --min-z -1.5 --baseline
+
+python -m pytest warm_fps/tests/ -q
+```
+
+Defaults come from `config.py` / `.env`. The validity thresholds are
+**data-adaptive** — a factor times the median sample spacing — so they track
+whatever cloud they're given:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--samples M` | `64` | constant sample count `M` (never drifts here). |
+| `--min-occupancy` | `1` | drop a sample whose cell holds fewer points than this. |
+| `--stale-factor` | `2.0` | drop samples farther than `factor × median spacing` from any point (`0` disables). |
+| `--separation-factor` | `0.5` | drop the lesser of two samples closer than `factor × median spacing` (`0` disables). |
+| `--baseline` | off | also cold-rebuild a fresh FPS each frame and report `fps_cham`, `ratio`, `direct`. |
+
+The output columns mirror the temporal demo, with `kept` / `drop` / `refill`
+replacing `edits` / `ins` / `evt`: `kept` carried samples reused as seeds, `drop`
+discarded (vanished / stale / redundant), `refill` re-sampled by the FPS
+continuation (`= M − kept`). The quality columns (`chamfer`, `fps_cham`, `ratio`,
+`direct`) mean exactly what they do in the Phase 3 temporal demo above.
+
+### What it shows (and the knob to turn)
+
+On KITTI at `M=512` with the default thresholds, validity stays high (~85 % kept)
+and `ratio ≈ 2.0` — about the same as Phase 3's insert/evict, because keeping that
+many carried positions also keeps their accumulated drift. Tightening the validity
+tests (e.g. `--stale-factor 0.5`) drops more samples (~50 % kept) and refills more
+from the current cloud, pulling `ratio` toward **~1.4** — at the cost of reusing
+less and doing more FPS work. That continuum, from cheap-but-drifted to
+rebuild-quality, is the whole point of the approach, and is what this demo
+measures. See `warm_fps/README.md` for the full write-up.
+
+---
+
 ## Configuration (`config.py` + `.env`)
 
 The defaults that used to be duplicated across the demos (sample count, crop,
@@ -460,6 +550,11 @@ python -m pytest phase_2/tests/ -q
 python -m pytest phase_3/tests/ -q
 python phase_3/temporal_demo.py --dataset kitti --num-frames 30 \
     --dims 3 --max-range 40 --min-z -1.5 --baseline
+
+# ── warm_fps — partial-rebuild alternative to Phase 3 ────────────────────────
+python -m pytest warm_fps/tests/ -q
+python warm_fps/temporal_demo.py --dataset kitti --num-frames 30 \
+    --max-range 40 --min-z -1.5 --baseline
 ```
 
 > **Tip:** run the test suites one phase at a time. Each phase has its own
@@ -477,3 +572,5 @@ Per-phase documentation:
   options, and the API.
 - **`phase_3/README.md`** — insertion, eviction priority, one-hop updates, the
   budget tracker, and the `correct()` frame.
+- **`warm_fps/README.md`** — the partial-rebuild alternative: the validity
+  classifier, warm-started FPS, and the validity-fraction knob.

@@ -1,21 +1,3 @@
-"""
-Real-LiDAR data loading for the FPS-Voronoi pipeline.
-
-The Phase 1/2/3 engine is dimension-agnostic — `cell_membership`,
-`min_pairwise_distance`, `covering_radius`, `cell_occupancy`,
-`delaunay_neighbors` and FPS all operate on an (N, D) tensor regardless of D.
-So feeding real data is purely a loading concern: read a LiDAR frame into a
-point-cloud tensor `P`, optionally keeping full 3-D (x, y, z) or projecting to a
-2-D top-down (x, y) view so the existing 2-D visualisations keep working.
-
-Two on-disk formats are supported and auto-detected by extension:
-
-    KITTI    *.bin       float32, reshape(-1, 4)  → x, y, z, intensity
-    nuScenes *.pcd.bin   float32, reshape(-1, 5)  → x, y, z, intensity, ring
-
-(Same conventions as extract/extract_kitti.py and extract/extract_nuscenes.py.)
-"""
-
 from __future__ import annotations
 
 import glob
@@ -91,26 +73,7 @@ def load_lidar_bin(
 
 
 def chamfer_distance(A: torch.Tensor, B: torch.Tensor, chunk: int = 8192):
-    """Symmetric mean Chamfer distance between point sets ``A`` and ``B``.
-
-    Same definition as ``extract/`` (mean of L2 nearest-neighbour distances in
-    both directions), but returns the two directed halves separately because
-    here ``A`` is a cloud and ``B`` a sample set, and the halves mean different
-    things:
-
-        a2b — mean over A of distance to its nearest point in B.
-              With A = cloud, B = samples this is the **coverage** error: how far
-              the typical cloud point is from any sample (== the misfit_mean we
-              already track).
-        b2a — mean over B of distance to its nearest point in A.
-              With B = samples, A = cloud this is the **faithfulness** error: how
-              far a sample sits from any real point — large for stale / floating
-              samples that no longer correspond to anything in the cloud.
-
-    Returns ``(total, a2b, b2a)`` with ``total = a2b + b2a``, all in metres.
-    Computed in chunks over ``A`` so it scales to large clouds; one pass yields
-    both directions.
-    """
+    """Symmetric mean Chamfer distance between point sets ``A`` and ``B``."""
     Na, Nb = A.shape[0], B.shape[0]
     if Na == 0 or Nb == 0:
         raise ValueError("Chamfer distance needs two non-empty point sets.")
