@@ -173,7 +173,7 @@ tensor `P`:
 | `load_lidar_bin(path, dims=3, max_range=None, min_z=None)` | Load one frame into an `(N, dims)` tensor. |
 | `list_frames(dataset)` | Sorted list of frame paths for `"nuscenes"` or `"kitti"`. |
 | `load_frame(dataset, index, **kw)` | Convenience: load the `index`-th frame by dataset name. |
-| `chamfer_distance(A, B)` | Symmetric Chamfer distance, returned split into its two directed halves (see the temporal section). |
+| `chamfer_distance(A, B)` | Symmetric Chamfer distance (backed by **PyTorch3D**; squared-L2, metres²), returned split into its two directed halves (see the temporal section). |
 
 Two on-disk formats are **auto-detected by file extension**:
 
@@ -530,6 +530,40 @@ All phases share a single virtual environment at the repo root. Set it up once:
 python -m venv venv                      # if not already present
 venv/bin/pip install -r requirements.txt
 ```
+
+**PyTorch3D (preferred backend for `chamfer_distance`).** The Chamfer distance
+used by the temporal demos prefers [PyTorch3D](https://github.com/facebookresearch/pytorch3d),
+but **falls back automatically** to the pure-torch `chamfer_distance_legacy` if
+PyTorch3D is missing or fails to load (with a one-time warning) — so the demos run
+either way. PyTorch3D is **not on PyPI** and so is not in `requirements.txt`;
+install it after the rest, matching your installed `torch`/CUDA, if you want the
+intended backend:
+
+```bash
+# Option A — prebuilt wheel (fastest; only for supported torch+CUDA combos).
+# Browse https://anaconda.org/pytorch3d/pytorch3d or the project's install guide
+# for a wheel matching your torch version, then e.g.:
+venv/bin/pip install fvcore iopath
+venv/bin/pip install --no-index --no-cache-dir pytorch3d \
+    -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/<py-torch-cuda>/download.html
+
+# Option B — build from source (works on CPU-only too; needs a C++ compiler).
+# Set FORCE_CUDA=0 for a CPU build; the chamfer op falls back to CPU.
+venv/bin/pip install fvcore iopath
+FORCE_CUDA=0 venv/bin/pip install "git+https://github.com/facebookresearch/pytorch3d.git"
+```
+
+> If your `torch` is newer than any PyTorch3D release supports, the source build
+> (Option B) is the reliable route. See the
+> [official install guide](https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md)
+> for the wheel/`torch` compatibility matrix.
+>
+> **Metric note:** PyTorch3D's Chamfer uses **squared** L2 distances, so the
+> reported `chamfer` / `fps_cham` values are in metres² — squared relative to the
+> earlier mean-L2 numbers quoted elsewhere in this README. *Lower = closer* still
+> holds; only the magnitudes (and the `ratio`) differ. The legacy fallback reports
+> **mean-L2 metres**, so which backend ran changes the absolute magnitudes — the
+> one-time warning tells you when the fallback is in use.
 
 Then activate it and run any phase:
 

@@ -35,7 +35,6 @@ def _cell_stats(P: torch.Tensor, S: torch.Tensor, chunk: int = 8192):
 def valid_mask(
     P: torch.Tensor,
     S: torch.Tensor,
-    *,
     min_occupancy: int = 1,
     stale_dist: float | None = None,
     separation_min: float | None = None,
@@ -145,7 +144,6 @@ def warm_resample(
     P: torch.Tensor,
     S_prev: torch.Tensor,
     num_samples: int,
-    *,
     min_occupancy: int = 1,
     stale_dist: float | None = None,
     separation_min: float | None = None,

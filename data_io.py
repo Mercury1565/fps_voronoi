@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import os
+import warnings
 
 import numpy as np
 import torch
@@ -72,7 +73,7 @@ def load_lidar_bin(
     return torch.from_numpy(np.ascontiguousarray(out, dtype=np.float32))
 
 
-def chamfer_distance(A: torch.Tensor, B: torch.Tensor, chunk: int = 8192):
+def chamfer_distance_legacy(A: torch.Tensor, B: torch.Tensor, chunk: int = 8192):
     """Symmetric mean Chamfer distance between point sets ``A`` and ``B``."""
     Na, Nb = A.shape[0], B.shape[0]
     if Na == 0 or Nb == 0:
@@ -88,6 +89,61 @@ def chamfer_distance(A: torch.Tensor, B: torch.Tensor, chunk: int = 8192):
     a2b = a2b_sum / Na
     b2a = float(b2a_min.mean())
     return a2b + b2a, a2b, b2a
+
+_CHAMFER_FALLBACK_WARNED = False
+
+
+def _chamfer_pytorch3d(A: torch.Tensor, B: torch.Tensor):
+    """Chamfer via PyTorch3D. Raises if PyTorch3D is missing or the call fails.
+
+    The two directed halves are obtained with separate ``single_directional``
+    calls and summed, matching PyTorch3D's bidirectional default. Uses **squared**
+    L2 distances (``norm=2``), so values are in metres².
+    """
+    from pytorch3d.loss import chamfer_distance as _p3d_chamfer
+
+    # PyTorch3D expects batched (B, N, D) clouds; add a singleton batch dim.
+    a, b = A.unsqueeze(0), B.unsqueeze(0)
+    a2b, _ = _p3d_chamfer(a, b, single_directional=True)  # mean over A -> nearest B
+    b2a, _ = _p3d_chamfer(b, a, single_directional=True)  # mean over B -> nearest A
+    a2b, b2a = float(a2b), float(b2a)
+    return a2b + b2a, a2b, b2a
+
+
+def chamfer_distance(A: torch.Tensor, B: torch.Tensor):
+    """Symmetric Chamfer distance between point sets ``A`` and ``B``.
+
+    Prefers PyTorch3D (:func:`pytorch3d.loss.chamfer_distance`); if that is
+    unavailable or fails *for any reason* (not installed, build broken, runtime
+    error), it falls back to :func:`chamfer_distance_legacy`, the pure-torch
+    implementation. Either way returns ``(total, a2b, b2a)``.
+
+    .. note::
+       The two backends differ in units: PyTorch3D reports **squared** L2
+       (metres²); the legacy fallback reports **mean L2** (metres). So which
+       backend ran affects the absolute magnitude of the numbers — a one-time
+       warning is emitted when the fallback is used so this isn't silent.
+
+    See the README → "Trying it out" for installing PyTorch3D.
+    """
+    if A.shape[0] == 0 or B.shape[0] == 0:
+        raise ValueError("Chamfer distance needs two non-empty point sets.")
+
+    try:
+        return _chamfer_pytorch3d(A, B)
+    except Exception as exc:  # noqa: BLE001 - intentional catch-all fallback
+        global _CHAMFER_FALLBACK_WARNED
+        if not _CHAMFER_FALLBACK_WARNED:
+            warnings.warn(
+                f"PyTorch3D chamfer unavailable ({type(exc).__name__}: {exc}); "
+                "falling back to chamfer_distance_legacy (mean-L2 metres, not "
+                "squared metres²). Install PyTorch3D to use the intended backend "
+                "— see the README.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _CHAMFER_FALLBACK_WARNED = True
+        return chamfer_distance_legacy(A, B)
 
 
 def list_frames(dataset: str) -> list[str]:

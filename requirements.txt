@@ -1,3 +1,7 @@
+# pytorch3d — preferred backend for data_io.chamfer_distance (falls back to the
+# pure-torch chamfer_distance_legacy if absent). NOT on PyPI, so it cannot be
+# pinned here; install it separately (see README -> "Trying it out"):
+#   pip install "git+https://github.com/facebookresearch/pytorch3d.git"
 torch>=2.0.0
 scipy>=1.9.0
 numpy>=1.23.0
